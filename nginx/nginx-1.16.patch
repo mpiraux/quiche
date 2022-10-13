@@ -866,6 +866,7 @@ index 000000000..bc73cffc9
 +        c->socklen,
 +        c->local_sockaddr,
 +        c->local_socklen,
++        0,
 +    };
 +
 +    /* Process the client's Initial packet, which was saved into c->buffer by
@@ -932,6 +933,7 @@ index 000000000..bc73cffc9
 +            c->socklen,
 +            c->local_sockaddr,
 +            c->local_socklen,
++            0,
 +        };
 +
 +        ssize_t done = quiche_conn_recv(c->quic->conn, b, n, &recv_info);
