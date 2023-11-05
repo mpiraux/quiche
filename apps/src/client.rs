@@ -28,7 +28,6 @@ use crate::args::*;
 use crate::common::*;
 
 use std::collections::HashMap;
-use std::net::Ipv6Addr;
 use std::net::ToSocketAddrs;
 
 use std::io::prelude::*;
