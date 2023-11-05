@@ -302,6 +302,7 @@ Options:
   --session-file PATH      File used to cache a TLS session for resumption.
   --source-port PORT       Source port to use when connecting to the server [default: 0].
   --initial-cwnd-packets PACKETS   The initial congestion window size in terms of packet count [default: 10].
+  --enable-adda            Enable additional addresses support in client.
   -h --help                Show this screen.
 ";
 
@@ -325,6 +326,7 @@ pub struct ClientArgs {
     pub addrs: Vec<SocketAddr>,
     pub rm_addrs: Vec<(std::time::Duration, SocketAddr)>,
     pub status: Vec<(std::time::Duration, SocketAddr, bool)>,
+    pub enable_additional_addresses: bool,
 }
 
 impl Args for ClientArgs {
@@ -453,6 +455,8 @@ impl Args for ClientArgs {
             })
             .collect();
 
+        let enable_additional_addresses = args.get_bool("--enable-adda");
+
         ClientArgs {
             version,
             dump_response_path,
@@ -472,6 +476,7 @@ impl Args for ClientArgs {
             addrs,
             rm_addrs,
             status,
+            enable_additional_addresses,
         }
     }
 }
@@ -497,6 +502,7 @@ impl Default for ClientArgs {
             addrs: vec![],
             rm_addrs: vec![],
             status: vec![],
+            enable_additional_addresses: false,
         }
     }
 }
@@ -538,6 +544,7 @@ Options:
   --disable-pacing            Disable pacing (linux only).
   --initial-cwnd-packets PACKETS      The initial congestion window size in terms of packet count [default: 10].
   --multipath                 Enable multipath support.
+  --additional-address IPPORT   Adds one additional address in the text form ip:port
   -h --help                   Show this screen.
 ";
 
@@ -551,6 +558,7 @@ pub struct ServerArgs {
     pub key: String,
     pub disable_gso: bool,
     pub disable_pacing: bool,
+    pub additional_addresses: Vec<String>,
 }
 
 impl Args for ServerArgs {
@@ -565,6 +573,11 @@ impl Args for ServerArgs {
         let key = args.get_str("--key").to_string();
         let disable_gso = args.get_bool("--disable-gso");
         let disable_pacing = args.get_bool("--disable-pacing");
+        let additional_addresses = if args.get_str("--additional-address") != "" {
+            vec![(args.get_str("--additional-address").to_string())]
+        } else {
+            vec![]
+        };
 
         ServerArgs {
             listen,
@@ -575,6 +588,7 @@ impl Args for ServerArgs {
             key,
             disable_gso,
             disable_pacing,
+            additional_addresses
         }
     }
 }

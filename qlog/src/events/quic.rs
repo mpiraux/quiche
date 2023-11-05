@@ -348,6 +348,12 @@ pub enum AckedRanges {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct AdditionalAddress {
+    pub ip: String,
+    pub port: u16,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
 #[serde(rename_all = "snake_case")]
 pub enum QuicFrameTypeName {
     Padding,
@@ -375,6 +381,7 @@ pub enum QuicFrameTypeName {
     AckMp,
     PathAbandon,
     PathStatus,
+    AdditionalAddresses,
     Unknown,
 }
 
@@ -523,6 +530,11 @@ pub enum QuicFrame {
     PathAvailable {
         dcid_seq_num: u64,
         seq_num: u64,
+    },
+
+    AdditionalAddresses {
+        seq_num: u64,
+        additional_addresses: Vec<AdditionalAddress>,
     },
 
     Unknown {

@@ -382,6 +382,7 @@
 #[macro_use]
 extern crate log;
 
+use frame::AdditionalAddress;
 #[cfg(feature = "qlog")]
 use qlog::events::connectivity::TransportOwner;
 #[cfg(feature = "qlog")]
@@ -404,6 +405,7 @@ use stream::StreamPriorityKey;
 
 use std::cmp;
 use std::convert::TryInto;
+use std::net::AddrParseError;
 use std::time;
 
 use std::sync::Arc;
@@ -1148,6 +1150,14 @@ impl Config {
         self.local_transport_params.enable_multipath = v;
     }
 
+    /// Sets the `additional_addresses` transport parameter, negotiating the
+    /// usage of the additional addresses extension over this connection.
+    ///
+    /// The default value is `false`.
+    pub fn set_additional_addresses(&mut self, v: bool) {
+        self.local_transport_params.enable_additional_addresses = v;
+    }
+
     /// Sets the congestion control algorithm used by string.
     ///
     /// The default value is `cubic`. On error `Error::CongestionControl`
@@ -1482,6 +1492,16 @@ pub struct Connection {
 
     /// Structure used when coping with abandoned paths in multipath.
     dcid_seq_to_abandon: VecDeque<u64>,
+
+    /// Additional addresses sequence. The server
+    additional_addresses_seq: u64,
+
+    /// Additional addresses. The server will advertise them while the client 
+    /// can use them.
+    additional_addresses: Vec<AdditionalAddress>,
+
+    /// Whether to emit a new ADDITIONAL_ADDRESSES and increment the sequence.
+    emit_additional_addresses: bool,
 }
 
 /// Creates a new server-side connection.
@@ -1912,6 +1932,10 @@ impl Connection {
             stopped_stream_remote_count: 0,
 
             dcid_seq_to_abandon: VecDeque::new(),
+
+            additional_addresses: Vec::new(),
+            additional_addresses_seq: if is_server { 0 } else { u64::MAX },
+            emit_additional_addresses: false,
         };
 
         // Don't support multipath with zero-length CIDs.
@@ -3583,6 +3607,13 @@ impl Connection {
                             .ok();
                     },
 
+                    frame::Frame::AdditionalAddresses { 
+                        seq_num: _, 
+                        additional_addresses: _ 
+                    } => {
+                        self.emit_additional_addresses = true;
+                    }
+
                     _ => (),
                 }
             }
@@ -4192,6 +4223,16 @@ impl Connection {
                     in_flight = true;
                 } else {
                     break;
+                }
+            }
+
+            if self.is_server && self.peer_transport_params.enable_additional_addresses && self.emit_additional_addresses {
+                if push_frame_to_pkt!(b, frames, frame::Frame::AdditionalAddresses { 
+                    seq_num: self.additional_addresses_seq, 
+                    additional_addresses: self.additional_addresses.clone()
+                }, left) {
+                    self.additional_addresses_seq += 1;
+                    self.emit_additional_addresses = false;
                 }
             }
         }
@@ -6242,6 +6283,39 @@ impl Connection {
         Ok(())
     }
 
+    /// Sets the additional addresses that the server can advertise.
+    /// Addresses are encoding as ip:port strings.
+    pub fn set_additional_addresses(&mut self, additional_addresses: Vec<String>) -> std::result::Result<(), AddrParseError> {
+        if !self.is_server {
+            return Ok(())
+        }
+
+        let parsed_addresses: std::result::Result<Vec<AdditionalAddress>, AddrParseError> = additional_addresses.iter()
+            .map(|a| SocketAddr::from_str(a))
+            .map(|s| 
+                match s {
+                    Ok(s) => Ok(AdditionalAddress {
+                        ip_address: s.ip(),
+                        ip_port: s.port(),
+                    }),
+                    Err(e) => Err(e)
+                })
+            .collect();
+        self.additional_addresses = parsed_addresses?;
+        self.emit_additional_addresses = true;
+
+        Ok(())
+    }
+
+    /// Gets the server additional addresses and the latest sequence number.
+    pub fn get_server_additional_addresses(&self) -> Result<(u64, &Vec<AdditionalAddress>)> {
+        if self.is_server || !self.local_transport_params.enable_additional_addresses {
+            return Err(Error::InvalidState);
+        }
+
+        Ok((self.additional_addresses_seq, &self.additional_addresses))
+    }
+
     /// Provides additional source Connection IDs that the peer can use to reach
     /// this host.
     ///
@@ -7069,6 +7143,7 @@ impl Connection {
                 self.paths.has_path_abandon() ||
                 self.paths.has_path_status() ||
                 send_path.needs_ack_eliciting ||
+                (self.peer_transport_params.enable_additional_addresses && self.emit_additional_addresses) ||
                 send_path.probing_required())
         {
             // Only clients can send 0-RTT packets.
@@ -7745,6 +7820,21 @@ impl Connection {
                     .ok_or(Error::InvalidFrame)?;
                 self.paths.on_path_status_received(pid, seq_num, true);
             },
+
+            frame::Frame::AdditionalAddresses { 
+                seq_num,
+                additional_addresses
+            } => {
+                if self.is_server() {
+                    return Err(Error::InvalidFrame);
+                }
+                
+                if self.additional_addresses_seq < seq_num || self.additional_addresses_seq == u64::MAX {
+                    self.additional_addresses = additional_addresses;
+                    self.additional_addresses_seq = seq_num;
+                    //TODO(mp): Do handle addresses changes.
+                }
+            }
         };
         Ok(())
     }
@@ -8422,6 +8512,8 @@ pub struct TransportParams {
     pub max_datagram_frame_size: Option<u64>,
     /// Multipath extension parameter, if any.
     pub enable_multipath: bool,
+    /// Additional Addresses extension parameter
+    pub enable_additional_addresses: bool,
 }
 
 impl Default for TransportParams {
@@ -8445,6 +8537,7 @@ impl Default for TransportParams {
             retry_source_connection_id: None,
             max_datagram_frame_size: None,
             enable_multipath: false,
+            enable_additional_addresses: false,
         }
     }
 }
@@ -8597,6 +8690,14 @@ impl TransportParams {
 
                 0x0f739bbc1b666d06 => {
                     tp.enable_multipath = true;
+                },
+
+                0x925adda01 => {
+                    if !is_server {
+                        return Err(Error::InvalidTransportParam);
+                    }
+
+                    tp.enable_additional_addresses = true;
                 },
 
                 // Ignore unknown parameters.
@@ -8763,6 +8864,12 @@ impl TransportParams {
 
         if tp.enable_multipath {
             TransportParams::encode_param(&mut b, 0x0f739bbc1b666d06, 0)?;
+        }
+
+        if !is_server {
+            if tp.enable_additional_addresses {
+                TransportParams::encode_param(&mut b, 0x925adda01, 0)?;
+            }
         }
 
         let out_len = b.off();
@@ -9399,6 +9506,7 @@ mod tests {
             retry_source_connection_id: Some(b"retry".to_vec().into()),
             max_datagram_frame_size: Some(32),
             enable_multipath: true,
+            enable_additional_addresses: false,
         };
 
         let mut raw_params = [42; 256];
@@ -9430,12 +9538,13 @@ mod tests {
             retry_source_connection_id: None,
             max_datagram_frame_size: Some(32),
             enable_multipath: true,
+            enable_additional_addresses: true,
         };
 
         let mut raw_params = [42; 256];
         let raw_params =
             TransportParams::encode(&tp, false, &mut raw_params).unwrap();
-        assert_eq!(raw_params.len(), 78);
+        assert_eq!(raw_params.len(), 87);
 
         let new_tp = TransportParams::decode(raw_params, true).unwrap();
 
@@ -17642,6 +17751,60 @@ mod tests {
         let pipe = pipe_with_exchanged_cids(&mut config, 0, 16, 1);
 
         assert_eq!(pipe.client.is_multipath_enabled(), false);
+    }
+
+    #[test]
+    fn additional_addresses() {
+        let mut config = Config::new(crate::PROTOCOL_VERSION).unwrap();
+        config
+            .load_cert_chain_from_pem_file("examples/cert.crt")
+            .unwrap();
+        config
+            .load_priv_key_from_pem_file("examples/cert.key")
+            .unwrap();
+        config
+            .set_application_protos(&[b"proto1", b"proto2"])
+            .unwrap();
+        config.verify_peer(false);
+        config.set_active_connection_id_limit(3);
+        config.set_initial_max_data(100000);
+        config.set_initial_max_stream_data_bidi_local(100000);
+        config.set_initial_max_stream_data_bidi_remote(100000);
+        config.set_initial_max_streams_bidi(2);
+        config.set_multipath(true);
+        config.set_additional_addresses(true);
+
+        let mut pipe = pipe_with_exchanged_cids(&mut config, 16, 16, 1);
+        assert_eq!(pipe.handshake(), Ok(()));
+
+        assert_eq!(pipe.client.is_multipath_enabled(), true);
+        assert_eq!(pipe.server.peer_transport_params.enable_additional_addresses, true);
+        assert_eq!(pipe.client.peer_transport_params.enable_additional_addresses, false);
+
+        assert_eq!(pipe.server.set_additional_addresses(vec!["[::1]:4242".to_string()]), Ok(()));
+        assert_eq!(pipe.advance(), Ok(()));
+    
+        assert_eq!(pipe.client.additional_addresses_seq, 0);
+        assert_eq!(pipe.client.additional_addresses.len(), 1);
+        assert_eq!(pipe.client.additional_addresses[0], AdditionalAddress {
+            ip_address: "::1".parse().unwrap(),
+            ip_port: 4242,
+        });
+
+        assert_eq!(pipe.server.set_additional_addresses(vec!["[::1]:4242".to_string(), "127.0.0.1:4243".to_string()]), Ok(()));
+        pipe.server.emit_additional_addresses = true;
+        assert_eq!(pipe.advance(), Ok(()));
+    
+        assert_eq!(pipe.client.additional_addresses_seq, 1);
+        assert_eq!(pipe.client.additional_addresses.len(), 2);
+        assert_eq!(pipe.client.additional_addresses[0], AdditionalAddress {
+            ip_address: "::1".parse().unwrap(),
+            ip_port: 4242,
+        });
+        assert_eq!(pipe.client.additional_addresses[1], AdditionalAddress {
+            ip_address: "127.0.0.1".parse().unwrap(),
+            ip_port: 4243,
+        });
     }
 }
 

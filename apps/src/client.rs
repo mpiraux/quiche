@@ -28,6 +28,7 @@ use crate::args::*;
 use crate::common::*;
 
 use std::collections::HashMap;
+use std::net::Ipv6Addr;
 use std::net::ToSocketAddrs;
 
 use std::io::prelude::*;
@@ -73,10 +74,11 @@ pub fn connect(
         connect_url.to_socket_addrs().unwrap().next().unwrap()
     };
 
-    let (sockets, src_addr_to_token, local_addr) =
+    let (mut sockets, mut src_addr_to_token, local_addr) =
         create_sockets(&mut poll, &peer_addr, &args);
     let mut addrs = Vec::with_capacity(sockets.len());
     addrs.push(local_addr);
+    //addrs.push("[::]:0".parse().unwrap());
     for src in src_addr_to_token.keys() {
         if *src != local_addr {
             addrs.push(*src);
@@ -128,6 +130,7 @@ pub fn connect(
     config.set_disable_active_migration(!conn_args.enable_active_migration);
     config.set_active_connection_id_limit(conn_args.max_active_cids);
     config.set_multipath(conn_args.multipath);
+    config.set_additional_addresses(args.enable_additional_addresses);
 
     config.set_max_connection_window(conn_args.max_window);
     config.set_max_stream_window(conn_args.max_stream_window);
@@ -245,6 +248,7 @@ pub fn connect(
     let mut scid_sent = false;
     let mut new_path_probed = false;
     let mut migrated = false;
+    let mut additional_addresses_seq = u64::MAX;
 
     loop {
         if !conn.is_in_early_data() || app_proto_selected {
@@ -522,6 +526,50 @@ pub fn connect(
                     true
                 }
             });
+        }
+
+        if let Ok((seq, additional_addresses)) = conn.get_server_additional_addresses() {
+            if (additional_addresses_seq == u64::MAX && seq != u64::MAX) || additional_addresses_seq < seq {
+                println!("ADDITIONAL ADDRESSES {}!!", seq);
+                println!("{:?}", additional_addresses);
+                additional_addresses_seq = seq;
+                let new_peer_addr: std::net::SocketAddr = additional_addresses[0].clone().into();
+                let mut new_local_addr = local_addr.clone();
+                if local_addr.is_ipv4() != new_peer_addr.is_ipv4() {
+                    for l_addr in &addrs {
+                        if l_addr.is_ipv4() == new_peer_addr.is_ipv4() {
+                            new_local_addr = l_addr.clone();
+                            break;
+                        }
+                    }
+                    if new_local_addr.is_ipv4() != new_peer_addr.is_ipv4() {
+                        let socket = mio::net::UdpSocket::bind(match new_peer_addr.is_ipv4() {
+                            true => "0.0.0.0:0",
+                            false => "[::0]:0",
+                        }.parse().unwrap()).unwrap();
+                        let local_addr = socket.local_addr().unwrap();
+                        let token = sockets.insert(socket);
+                        src_addr_to_token.insert(local_addr, token);
+                        poll.registry()
+                            .register(
+                                &mut sockets[token],
+                                mio::Token(token),
+                                mio::Interest::READABLE,
+                            )
+                            .unwrap();
+                        new_local_addr = local_addr.clone();
+                    }   
+                }
+
+                if conn.is_multipath_enabled() {
+                    println!("Probe path {:?}->{:?}", new_local_addr, new_peer_addr);
+                    conn.probe_path(new_local_addr.clone(), new_peer_addr).unwrap();
+                } else {
+                    println!("Migrating to {:?}->{:?}", new_local_addr, new_peer_addr);
+                    conn.migrate(new_local_addr.clone(), new_peer_addr).unwrap();
+                    migrated = true;
+                }
+            }
         }
 
         // Determine in which order we are going to iterate over paths.

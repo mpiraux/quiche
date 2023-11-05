@@ -25,6 +25,10 @@
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use std::convert::TryInto;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
+use std::net::Ipv6Addr;
+use std::net::SocketAddr;
 
 use crate::Error;
 use crate::Result;
@@ -52,6 +56,18 @@ pub struct EcnCounts {
     ect0_count: u64,
     ect1_count: u64,
     ecn_ce_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdditionalAddress {
+    pub ip_address: IpAddr,
+    pub ip_port: u16,
+}
+
+impl Into<SocketAddr> for AdditionalAddress {
+    fn into(self) -> SocketAddr {
+        SocketAddr::new(self.ip_address, self.ip_port)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -199,6 +215,11 @@ pub enum Frame {
     PathAvailable {
         dcid_seq_num: u64,
         seq_num: u64,
+    },
+
+    AdditionalAddresses {
+        seq_num: u64,
+        additional_addresses: Vec<AdditionalAddress>,
     },
 }
 
@@ -365,6 +386,8 @@ impl Frame {
                 seq_num: b.get_varint()?,
             },
 
+            0x925adda01 => parse_additional_addresses_frame(b)?,
+
             _ => return Err(Error::InvalidFrame),
         };
 
@@ -386,6 +409,7 @@ impl Frame {
             (packet::Type::ZeroRTT, Frame::PathAbandon { .. }) => false,
             (packet::Type::ZeroRTT, Frame::PathStandby { .. }) => false,
             (packet::Type::ZeroRTT, Frame::PathAvailable { .. }) => false,
+            (packet::Type::ZeroRTT, Frame::AdditionalAddresses { .. }) => false,
 
             // ACK, CRYPTO and CONNECTION_CLOSE can be sent on all other packet
             // types.
@@ -654,6 +678,28 @@ impl Frame {
                 b.put_varint(*dcid_seq_num)?;
                 b.put_varint(*seq_num)?;
             },
+
+            Frame::AdditionalAddresses { 
+                seq_num, 
+                additional_addresses 
+            } => {
+                b.put_varint(0x925adda01)?;
+                
+                b.put_varint(*seq_num)?;
+                b.put_varint(additional_addresses.len() as u64)?;
+                for additional_address in additional_addresses {
+                    b.put_u8(match additional_address.ip_address {
+                        IpAddr::V4(_) => 4,
+                        IpAddr::V6(_) => 6,
+                    })?;
+                    let ip_address_bytes = match additional_address.ip_address {
+                        IpAddr::V4(ipv4) => ipv4.octets().to_vec(),
+                        IpAddr::V6(ipv6) => ipv6.octets().to_vec(),
+                    };
+                    b.put_bytes(ip_address_bytes.as_slice())?;
+                    b.put_u16(additional_address.ip_port)?;
+                }
+            },
         }
 
         Ok(before - b.cap())
@@ -881,6 +927,21 @@ impl Frame {
                 4 + // frame size
                 octets::varint_len(*dcid_seq_num) +
                 octets::varint_len(*seq_num)
+            },
+            Frame::AdditionalAddresses { 
+                seq_num, 
+                additional_addresses 
+            } => {
+                let mut frame_size = 8 + octets::varint_len(*seq_num) + octets::varint_len(additional_addresses.len() as u64);
+                for additional_address in additional_addresses {
+                    frame_size += 1 + 2;
+                    frame_size += match additional_address.ip_address {
+                        IpAddr::V4(_) => 4,
+                        IpAddr::V6(_) => 16,
+                    }
+                }
+
+                frame_size
             },
         }
     }
@@ -1151,6 +1212,17 @@ impl Frame {
                 dcid_seq_num: *dcid_seq_num,
                 seq_num: *seq_num,
             },
+
+            Frame::AdditionalAddresses { 
+                seq_num,
+                additional_addresses 
+            } => QuicFrame::AdditionalAddresses { 
+                seq_num: *seq_num,
+                additional_addresses: additional_addresses.iter().map(|a| qlog::events::quic::AdditionalAddress {
+                    ip: a.ip_address.to_string(),
+                    port: a.ip_port,
+                }).collect()
+            }
         }
     }
 }
@@ -1363,6 +1435,16 @@ impl std::fmt::Debug for Frame {
                     "PATH_AVAILABLE dcid_seq_num={dcid_seq_num:x} seq_num={seq_num:x}",
                 )?
             },
+
+            Frame::AdditionalAddresses { 
+                seq_num,
+                additional_addresses 
+            } => {
+                write!(
+                    f,
+                    "ADDITIONAL_ADDRESSES seq_num={seq_num} additional_addresses={additional_addresses:?}"
+                )?
+            }
         }
 
         Ok(())
@@ -1444,6 +1526,29 @@ fn parse_ack_mp_frame(ty: u64, b: &mut octets::Octets) -> Result<Frame> {
         ranges,
         ecn_counts,
     })
+}
+
+fn parse_additional_addresses_frame(b: &mut octets::Octets) -> Result<Frame> {
+    let seq_num = b.get_varint()?;
+    let additional_addresses_count = b.get_varint()?;
+
+    let mut additional_addresses: Vec<AdditionalAddress> = Vec::with_capacity(additional_addresses_count as usize);
+    for _i in 0..additional_addresses_count {
+        let address_version = b.get_u8()?;
+        if address_version != 4 && address_version != 6 {
+            return Err(Error::InvalidFrame)
+        }
+        let additional_address = AdditionalAddress {
+            ip_address: match address_version {
+                4 => IpAddr::V4(Ipv4Addr::new(b.get_u8()?, b.get_u8()?, b.get_u8()?, b.get_u8()?)),
+                6 => IpAddr::V6(Ipv6Addr::new(b.get_u16()?, b.get_u16()?, b.get_u16()?, b.get_u16()?, b.get_u16()?, b.get_u16()?, b.get_u16()?, b.get_u16()?)),
+                _ => return Err(Error::InvalidFrame),
+            },
+            ip_port: b.get_u16()?,
+        };
+        additional_addresses.push(additional_address);
+    }
+    Ok(Frame::AdditionalAddresses { seq_num, additional_addresses })
 }
 
 fn common_ack_to_bytes(
@@ -2542,6 +2647,44 @@ mod tests {
         let mut b = octets::Octets::with_slice(&d);
         assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
 
+        let mut b = octets::Octets::with_slice(&d);
+        assert!(Frame::from_bytes(&mut b, packet::Type::Initial).is_err());
+
+        let mut b = octets::Octets::with_slice(&d);
+        assert!(Frame::from_bytes(&mut b, packet::Type::ZeroRTT).is_err());
+
+        let mut b = octets::Octets::with_slice(&d);
+        assert!(Frame::from_bytes(&mut b, packet::Type::Handshake).is_err());
+    }
+
+    #[test]
+    fn additional_addresses() {
+        let mut d = [42; 128];
+
+        let frame = Frame::AdditionalAddresses {
+            seq_num: 42,
+            additional_addresses: vec![AdditionalAddress { 
+                ip_address: "127.0.0.1".parse().unwrap(), 
+                ip_port: 4242
+            },
+            AdditionalAddress { 
+                ip_address: "::1".parse().unwrap(), 
+                ip_port: 4242
+            }
+            ],
+        };
+
+        let wire_len = {
+            let mut b = octets::OctetsMut::with_slice(&mut d);
+            frame.to_bytes(&mut b).unwrap()
+        };
+
+        assert_eq!(frame.wire_len(), wire_len);
+        assert_eq!(wire_len, 36);
+
+        let mut b = octets::Octets::with_slice(&d);
+        assert_eq!(Frame::from_bytes(&mut b, packet::Type::Short), Ok(frame));
+        
         let mut b = octets::Octets::with_slice(&d);
         assert!(Frame::from_bytes(&mut b, packet::Type::Initial).is_err());
 
