@@ -6284,7 +6284,7 @@ impl Connection {
     }
 
     /// Sets the additional addresses that the server can advertise.
-    /// Addresses are encoding as ip:port strings.
+    /// Addresses are encoded as ip:port strings.
     pub fn set_additional_addresses(&mut self, additional_addresses: Vec<String>) -> std::result::Result<(), AddrParseError> {
         if !self.is_server {
             return Ok(())
@@ -6302,7 +6302,7 @@ impl Connection {
                 })
             .collect();
         self.additional_addresses = parsed_addresses?;
-        self.emit_additional_addresses = true;
+        self.emit_additional_addresses = self.additional_addresses_seq > 0 || self.additional_addresses.len() > 0;
 
         Ok(())
     }
