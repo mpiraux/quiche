@@ -384,7 +384,7 @@ extern crate log;
 
 use frame::AdditionalAddress;
 #[cfg(feature = "qlog")]
-use qlog::events::connectivity::TransportOwner;
+use qlog::events::connectivity::{TransportOwner, ConnectivityEventType};
 #[cfg(feature = "qlog")]
 use qlog::events::quic::RecoveryEventType;
 #[cfg(feature = "qlog")]
@@ -401,6 +401,10 @@ use qlog::events::EventImportance;
 use qlog::events::EventType;
 #[cfg(feature = "qlog")]
 use qlog::events::RawInfo;
+#[cfg(feature = "qlog")]
+use qlog::events::GenericEventType;
+#[cfg(feature = "qlog")]
+use qlog::events::connectivity::PathAssigned;
 use stream::StreamPriorityKey;
 
 use std::cmp;
@@ -1726,6 +1730,16 @@ const QLOG_METRICS: EventType =
     EventType::RecoveryEventType(RecoveryEventType::MetricsUpdated);
 
 #[cfg(feature = "qlog")]
+const QLOG_PATH_ASSIGNED: EventType =
+    EventType::ConnectivityEventType(ConnectivityEventType::PathAssigned);
+
+#[cfg(feature = "qlog")]
+#[allow(dead_code)]
+const QLOG_MESSAGE: EventType =
+    EventType::GenericEventType(GenericEventType::Message);
+    
+
+#[cfg(feature = "qlog")]
 struct QlogInfo {
     streamer: Option<qlog::streamer::QlogStreamer>,
     logged_peer_params: bool,
@@ -1937,6 +1951,17 @@ impl Connection {
             additional_addresses_seq: if is_server { 0 } else { u64::MAX },
             emit_additional_addresses: false,
         };
+
+        qlog_with_type!(QLOG_PATH_ASSIGNED, conn.qlog, q, {
+            q.add_event_data_now(qlog::events::EventData::PathAssigned(
+                PathAssigned {
+                    path_id: active_path_id.to_string(),
+                    path_remote: Some(peer.into()),
+                    path_local: Some(local.into()),
+                },
+            ))
+            .ok();
+        });
 
         // Don't support multipath with zero-length CIDs.
         if conn.ids.zero_length_scid() || conn.ids.zero_length_dcid() {
@@ -2813,7 +2838,7 @@ impl Connection {
                         trigger: trigger.clone(),
                     });
 
-                q.add_event_data_with_instant(ev_data_client, now).ok();
+                q.add_event_data_with_instant_and_path(ev_data_client, now, recv_pid.to_string()).ok();
 
                 let ev_data_server =
                     EventData::KeyUpdated(qlog::events::security::KeyUpdated {
@@ -2825,7 +2850,7 @@ impl Connection {
                         trigger,
                     });
 
-                q.add_event_data_with_instant(ev_data_server, now).ok();
+                q.add_event_data_with_instant_and_path(ev_data_server, now, recv_pid.to_string()).ok();
             });
         }
 
@@ -2925,13 +2950,13 @@ impl Connection {
                     trigger: None,
                 });
 
-            q.add_event_data_with_instant(ev_data, now).ok();
+            q.add_event_data_with_instant_and_path(ev_data, now, recv_pid.to_string()).ok();
         });
 
         qlog_with_type!(QLOG_PACKET_RX, self.qlog, q, {
             let recv_path = self.paths.get_mut(recv_pid)?;
             if let Some(ev_data) = recv_path.recovery.maybe_qlog() {
-                q.add_event_data_with_instant(ev_data, now).ok();
+                q.add_event_data_with_instant_and_path(ev_data, now, recv_pid.to_string()).ok();
             }
         });
 
@@ -4676,7 +4701,7 @@ impl Connection {
                         trigger: None,
                     });
 
-                q.add_event_data_with_instant(ev_data, now).ok();
+                q.add_event_data_with_instant_and_path(ev_data, now, send_pid.to_string()).ok();
             }
         });
 
@@ -4743,7 +4768,7 @@ impl Connection {
 
         qlog_with_type!(QLOG_METRICS, self.qlog, q, {
             if let Some(ev_data) = path.recovery.maybe_qlog() {
-                q.add_event_data_with_instant(ev_data, now).ok();
+                q.add_event_data_with_instant_and_path(ev_data, now, send_pid.to_string()).ok();
             }
         });
 
@@ -6009,7 +6034,8 @@ impl Connection {
 
         let handshake_status = self.handshake_status();
 
-        for (_, p) in self.paths.iter_mut() {
+        #[allow(unused_variables)]
+        for (path_id, p) in self.paths.iter_mut() {
             if let Some(timer) = p.closing_timer() {
                 if timer <= now {
                     trace!("{} path closing timeout expired", self.trace_id);
@@ -6038,7 +6064,7 @@ impl Connection {
 
                     qlog_with_type!(QLOG_METRICS, self.qlog, q, {
                         if let Some(ev_data) = p.recovery.maybe_qlog() {
-                            q.add_event_data_with_instant(ev_data, now).ok();
+                            q.add_event_data_with_instant_and_path(ev_data, now, path_id.to_string()).ok();
                         }
                     });
                 }
@@ -8087,6 +8113,17 @@ impl Connection {
         let path = self.paths.get_mut(pid)?;
         update_scid(&mut self.ids, pid, path, in_scid_seq)?;
 
+        qlog_with_type!(QLOG_PATH_ASSIGNED, self.qlog, q, {
+            q.add_event_data_now(qlog::events::EventData::PathAssigned(
+                PathAssigned {
+                    path_id: pid.to_string(),
+                    path_remote: Some(info.to.into()),
+                    path_local: Some(info.from.into()),
+                },
+            ))
+            .ok();
+        });
+
         Ok(pid)
     }
 
@@ -8267,6 +8304,17 @@ impl Connection {
             .map_err(|_| Error::OutOfIdentifiers)?;
         let path = self.paths.get_mut(pid)?;
         update_dcid(&mut self.ids, pid, path, Some(dcid_seq))?;
+
+        qlog_with_type!(QLOG_PATH_ASSIGNED, self.qlog, q, {
+            q.add_event_data_now(qlog::events::EventData::PathAssigned(
+                PathAssigned {
+                    path_id: pid.to_string(),
+                    path_remote: Some(peer_addr.into()),
+                    path_local: Some(local_addr.into()),
+                },
+            ))
+            .ok();
+        });
 
         Ok(pid)
     }

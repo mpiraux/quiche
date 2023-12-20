@@ -222,6 +222,76 @@ impl QlogStreamer {
         self.add_event(event)
     }
 
+    /// Writes a JSON-SEQ-serialized [Event] based on the provided [EventData]
+    /// at time [std::time::Instant::now()] with given path [String].
+    pub fn add_event_data_now_with_path(&mut self, event_data: EventData, path: String) -> Result<()> {
+        let now = std::time::Instant::now();
+
+        self.add_event_data_with_instant_and_path(event_data, now, path)
+    }
+
+    /// Writes a JSON-SEQ-serialized [Event] based on the provided [EventData]
+    /// and [std::time::Instant] with given path [String].
+    pub fn add_event_data_with_instant_and_path(
+        &mut self, event_data: EventData, now: std::time::Instant,
+        path: String
+    ) -> Result<()> {
+        if self.state != StreamerState::Ready {
+            return Err(Error::InvalidState);
+        }
+
+        let ty = EventType::from(&event_data);
+        if !EventImportance::from(ty).is_contained_in(&self.log_level) {
+            return Err(Error::Done);
+        }
+
+        let dur = if cfg!(test) {
+            std::time::Duration::from_secs(0)
+        } else {
+            now.duration_since(self.start_time)
+        };
+
+        let rel_time = dur.as_secs_f32() * 1000.0;
+        let event = Event::with_time_and_path(rel_time, event_data, path);
+
+        self.add_event(event)
+    }
+
+    /// Writes a JSON-SEQ-serialized [Event] based on the provided [EventData], [ExData]
+    /// at time [std::time::Instant::now()] with given path [String].
+    pub fn add_event_data_now_with_path_ex(&mut self, event_data: EventData, path: String, ex_data: ExData) -> Result<()> {
+        let now = std::time::Instant::now();
+
+        self.add_event_data_with_instant_and_path_ex(event_data, now, path, ex_data)
+    }
+
+    /// Writes a JSON-SEQ-serialized [Event] based on the provided [EventData], [ExData]
+    /// and [std::time::Instant] with given path [String].
+    pub fn add_event_data_with_instant_and_path_ex(
+        &mut self, event_data: EventData, now: std::time::Instant,
+        path: String, ex_data: ExData
+    ) -> Result<()> {
+        if self.state != StreamerState::Ready {
+            return Err(Error::InvalidState);
+        }
+
+        let ty = EventType::from(&event_data);
+        if !EventImportance::from(ty).is_contained_in(&self.log_level) {
+            return Err(Error::Done);
+        }
+
+        let dur = if cfg!(test) {
+            std::time::Duration::from_secs(0)
+        } else {
+            now.duration_since(self.start_time)
+        };
+
+        let rel_time = dur.as_secs_f32() * 1000.0;
+        let event = Event::with_time_and_path_ex(rel_time, event_data, path, ex_data);
+
+        self.add_event(event)
+    }
+
     /// Writes a JSON-SEQ-serialized [Event] using the provided [Event].
     pub fn add_event<E: Serialize + Eventable>(
         &mut self, event: E,

@@ -29,8 +29,7 @@ use crate::Token;
 use h3::*;
 use qpack::*;
 use quic::*;
-
-use connectivity::ConnectivityEventType;
+use connectivity::*;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -90,6 +89,7 @@ pub struct Event {
     // and then flattens those fields into the `Event` object.
     #[serde(flatten)]
     pub data: EventData,
+    pub path_id: Option<String>,
 
     #[serde(flatten)]
     pub ex_data: ExData,
@@ -116,6 +116,37 @@ impl Event {
             time,
             data,
             ex_data,
+            path_id: Default::default(),
+            protocol_type: Default::default(),
+            group_id: Default::default(),
+            time_format: Default::default(),
+            ty,
+        }
+    }
+
+    /// Returns a new `Event` object with the provided time, data and path.
+    pub fn with_time_and_path(time: f32, data: EventData, path: String) -> Self {
+        let ty = EventType::from(&data);
+        Event {
+            time,
+            data,
+            ex_data: Default::default(),
+            path_id: Some(path),
+            protocol_type: Default::default(),
+            group_id: Default::default(),
+            time_format: Default::default(),
+            ty,
+        }
+    }
+
+    /// Returns a new `Event` object with the provided time, data, path and ex_data.
+    pub fn with_time_and_path_ex(time: f32, data: EventData, path: String, ex_data: ExData) -> Self {
+        let ty = EventType::from(&data);
+        Event {
+            time,
+            data,
+            ex_data,
+            path_id: Some(path),
             protocol_type: Default::default(),
             group_id: Default::default(),
             time_format: Default::default(),
@@ -214,6 +245,9 @@ impl From<EventType> for EventImportance {
             EventType::ConnectivityEventType(
                 ConnectivityEventType::MtuUpdated,
             ) => EventImportance::Extra,
+            EventType::ConnectivityEventType(
+                ConnectivityEventType::PathAssigned,
+            ) => EventImportance::Base,
 
             EventType::SecurityEventType(SecurityEventType::KeyUpdated) =>
                 EventImportance::Base,
@@ -297,6 +331,9 @@ impl From<EventType> for EventImportance {
             EventType::QpackEventType(QpackEventType::InstructionCreated) =>
                 EventImportance::Base,
             EventType::QpackEventType(QpackEventType::InstructionParsed) =>
+                EventImportance::Base,
+
+            EventType::GenericEventType(GenericEventType::Message) =>
                 EventImportance::Base,
 
             _ => unimplemented!(),
@@ -393,6 +430,10 @@ impl From<&EventData> for EventType {
             EventData::MtuUpdated { .. } => EventType::ConnectivityEventType(
                 ConnectivityEventType::MtuUpdated,
             ),
+            EventData::PathAssigned  { .. } => 
+                EventType::ConnectivityEventType(
+                    ConnectivityEventType::PathAssigned
+                ),
 
             EventData::KeyUpdated { .. } =>
                 EventType::SecurityEventType(SecurityEventType::KeyUpdated),
@@ -543,6 +584,9 @@ pub enum EventData {
 
     #[serde(rename = "connectivity:mtu_updated")]
     MtuUpdated(connectivity::MtuUpdated),
+
+    #[serde(rename = "connectivity:path_assigned")]
+    PathAssigned(connectivity::PathAssigned),
 
     // Security
     #[serde(rename = "security:key_updated")]

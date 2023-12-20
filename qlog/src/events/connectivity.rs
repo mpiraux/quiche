@@ -24,6 +24,8 @@
 // NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 // SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::net::SocketAddr;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -62,6 +64,7 @@ pub enum ConnectivityEventType {
     SpinBitUpdated,
     ConnectionStateUpdated,
     MtuUpdated,
+    PathAssigned,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -144,4 +147,43 @@ pub struct MtuUpdated {
     pub old: Option<u16>,
     pub new: u16,
     pub done: Option<bool>,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct PathAssigned {
+    pub path_id: String,
+    pub path_remote: Option<PathEndpointInfo>,
+    pub path_local: Option<PathEndpointInfo>,
+}
+
+#[serde_with::skip_serializing_none]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, Debug)]
+pub struct PathEndpointInfo {
+    pub ip_v4: Option<String>,
+    pub ip_v6: Option<String>,
+    pub port_v4: Option<u16>,
+    pub port_v6: Option<u16>,
+    pub connections_ids: Vec<Bytes>,
+}
+
+impl From<SocketAddr> for PathEndpointInfo {
+    fn from(value: SocketAddr) -> Self {
+        match value {
+            SocketAddr::V4(v4) => PathEndpointInfo {
+                ip_v4: Some(v4.ip().to_string()),
+                ip_v6: None,
+                port_v4: Some(v4.port()),
+                port_v6: None,
+                connections_ids: vec![],
+            },
+            SocketAddr::V6(v6) => PathEndpointInfo {
+                ip_v4: None,
+                ip_v6: Some(v6.ip().to_string()),
+                port_v4: None,
+                port_v6: Some(v6.port()),
+                connections_ids: vec![],
+            },
+        }
+    }
 }
