@@ -209,10 +209,6 @@ fn main() {
                 break 'read;
             }
 
-            if !events.is_empty() || !continue_write {
-                println!("{:?} {} {}", events, events.is_empty(), continue_write);
-            }
-
             'events: for e in events.iter() {
                 let socket = sockets.get_mut(e.token().0).unwrap();
                 let local_addr = socket.local_addr().unwrap();
@@ -601,7 +597,6 @@ fn main() {
             }
 
             let socket = socket.unwrap();
-            println!("{:?}", socket);
 
             if let Err(e) = send_to(
                 socket,
