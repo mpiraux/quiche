@@ -133,6 +133,7 @@ pub fn connect(
 
     config.set_max_connection_window(conn_args.max_window);
     config.set_max_stream_window(conn_args.max_stream_window);
+    config.disable_cc_rollback(true);
 
     let mut keylog = None;
 

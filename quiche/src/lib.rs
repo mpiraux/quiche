@@ -731,6 +731,7 @@ pub struct Config {
     hystart: bool,
 
     pacing: bool,
+    no_rollback: bool,
     max_pacing_rate: Option<u64>,
 
     dgram_recv_max_queue_len: usize,
@@ -795,6 +796,7 @@ impl Config {
                 DEFAULT_INITIAL_CONGESTION_WINDOW_PACKETS,
             hystart: true,
             pacing: true,
+            no_rollback: false,
             max_pacing_rate: None,
 
             dgram_recv_max_queue_len: DEFAULT_MAX_DGRAM_QUEUE_LEN,
@@ -1279,6 +1281,15 @@ impl Config {
     /// The default value is `false`.
     pub fn set_disable_dcid_reuse(&mut self, v: bool) {
         self.disable_dcid_reuse = v;
+    }
+
+    /// Sets whether CUBIC can rollback it's state when recovering "a few packets".
+    ///
+    /// When set to `true`, it disable this mechanism.
+    ///
+    /// The default value is `false`.
+    pub fn disable_cc_rollback(&mut self, v: bool) {
+        self.no_rollback = v;
     }
 }
 

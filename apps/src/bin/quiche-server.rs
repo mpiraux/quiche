@@ -135,6 +135,7 @@ fn main() {
     config.set_max_stream_window(conn_args.max_stream_window);
 
     config.enable_pacing(pacing);
+    config.disable_cc_rollback(true);
 
     let mut keylog = None;
 

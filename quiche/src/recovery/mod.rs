@@ -186,6 +186,8 @@ pub struct Recovery {
 
     /// Initial congestion window size in terms of packet count.
     initial_congestion_window_packets: usize,
+
+    no_rollback: bool,
 }
 
 pub struct RecoveryConfig {
@@ -196,6 +198,7 @@ pub struct RecoveryConfig {
     pacing: bool,
     max_pacing_rate: Option<u64>,
     initial_congestion_window_packets: usize,
+    no_rollback: bool,
 }
 
 impl RecoveryConfig {
@@ -209,6 +212,7 @@ impl RecoveryConfig {
             max_pacing_rate: config.max_pacing_rate,
             initial_congestion_window_packets: config
                 .initial_congestion_window_packets,
+            no_rollback: config.no_rollback,
         }
     }
 }
@@ -318,6 +322,8 @@ impl Recovery {
 
             initial_congestion_window_packets: recovery_config
                 .initial_congestion_window_packets,
+
+            no_rollback: recovery_config.no_rollback,
         }
     }
 
