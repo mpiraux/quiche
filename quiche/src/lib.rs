@@ -7132,6 +7132,7 @@ impl Connection {
             return Ok(packet::Type::from_epoch(epoch));
         }
 
+        let send_path = self.paths.get(send_pid)?;
         for &epoch in packet::Epoch::epochs(
             packet::Epoch::Initial..=packet::Epoch::Application,
         ) {
@@ -7140,7 +7141,7 @@ impl Connection {
                 continue;
             }
 
-            if self.pkt_num_spaces.is_ready(epoch, None) {
+            if self.pkt_num_spaces.is_ready(epoch, send_path.active_dcid_seq) {
                 return Ok(packet::Type::from_epoch(epoch));
             }
 
@@ -7159,7 +7160,6 @@ impl Connection {
 
         // If there are flushable, almost full or blocked streams, use the
         // Application epoch.
-        let send_path = self.paths.get(send_pid)?;
         if (self.is_established() || self.is_in_early_data()) &&
             (self.should_send_handshake_done() ||
                 (self.almost_full && self.flow_control.max_data() < self.flow_control.max_data_next()) ||
