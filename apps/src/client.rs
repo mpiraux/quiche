@@ -133,7 +133,6 @@ pub fn connect(
 
     config.set_max_connection_window(conn_args.max_window);
     config.set_max_stream_window(conn_args.max_stream_window);
-    config.disable_cc_rollback(true);
 
     let mut keylog = None;
 
@@ -157,9 +156,14 @@ pub fn connect(
         config.enable_early_data();
     }
 
-    config
-        .set_cc_algorithm_name(&conn_args.cc_algorithm)
-        .unwrap();
+    if conn_args.cc_algorithm == "cubic-no-rollback" {
+        config.set_cc_algorithm_name("cubic").unwrap();
+        config.disable_cc_rollback(true);
+    } else {
+        config
+            .set_cc_algorithm_name(&conn_args.cc_algorithm)
+            .unwrap();
+    }
 
     if conn_args.disable_hystart {
         config.enable_hystart(false);

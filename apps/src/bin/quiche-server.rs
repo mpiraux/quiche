@@ -135,7 +135,6 @@ fn main() {
     config.set_max_stream_window(conn_args.max_stream_window);
 
     config.enable_pacing(pacing);
-    config.disable_cc_rollback(true);
 
     let mut keylog = None;
 
@@ -159,9 +158,14 @@ fn main() {
         config.grease(false);
     }
 
-    config
-        .set_cc_algorithm_name(&conn_args.cc_algorithm)
-        .unwrap();
+    if conn_args.cc_algorithm == "cubic-no-rollback" {
+        config.set_cc_algorithm_name("cubic").unwrap();
+        config.disable_cc_rollback(true);
+    } else {
+        config
+            .set_cc_algorithm_name(&conn_args.cc_algorithm)
+            .unwrap();
+    }
 
     if conn_args.disable_hystart {
         config.enable_hystart(false);
