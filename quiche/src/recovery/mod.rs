@@ -1168,7 +1168,7 @@ impl Recovery {
     }
 
     #[cfg(feature = "qlog")]
-    pub fn maybe_qlog(&mut self) -> Option<EventData> {
+    pub fn maybe_qlog(&mut self, lost_packets: usize) -> Option<EventData> {
         let qlog_metrics = QlogMetrics {
             min_rtt: self.min_rtt,
             smoothed_rtt: self.rtt(),
@@ -1178,6 +1178,8 @@ impl Recovery {
             bytes_in_flight: self.bytes_in_flight as u64,
             ssthresh: self.ssthresh as u64,
             pacing_rate: self.pacer.rate(),
+            app_limited: self.app_limited,
+            packets_lost: lost_packets as u64
         };
 
         self.qlog_metrics.maybe_update(qlog_metrics)
@@ -1436,6 +1438,8 @@ struct QlogMetrics {
     bytes_in_flight: u64,
     ssthresh: u64,
     pacing_rate: u64,
+    app_limited: bool,
+    packets_lost: u64,
 }
 
 #[cfg(feature = "qlog")]
@@ -1513,6 +1517,22 @@ impl QlogMetrics {
             None
         };
 
+        let new_app_limited = if self.app_limited != latest.app_limited {
+            self.app_limited = latest.app_limited;
+            emit_event = true;
+            Some(latest.app_limited)
+        } else {
+            None
+        };
+
+        let new_packets_lost = if latest.packets_lost > 0 {
+            self.packets_lost = latest.packets_lost;
+            emit_event = true;
+            Some(latest.packets_lost)
+        } else {
+            None
+        };
+
         if emit_event {
             // QVis can't use all these fields and they can be large.
             return Some(EventData::MetricsUpdated(
@@ -1527,6 +1547,8 @@ impl QlogMetrics {
                     ssthresh: new_ssthresh,
                     packets_in_flight: None,
                     pacing_rate: new_pacing_rate,
+                    app_limited: new_app_limited,
+                    packets_lost: new_packets_lost
                 },
             ));
         }
