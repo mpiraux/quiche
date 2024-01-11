@@ -7162,7 +7162,7 @@ impl Connection {
         let send_path = self.paths.get(send_pid)?;
         if (self.is_established() || self.is_in_early_data()) &&
             (self.should_send_handshake_done() ||
-                self.almost_full ||
+                (self.almost_full && self.flow_control.max_data() < self.flow_control.max_data_next()) ||
                 self.blocked_limit.is_some() ||
                 self.dgram_send_queue.has_pending() ||
                 self.local_error
