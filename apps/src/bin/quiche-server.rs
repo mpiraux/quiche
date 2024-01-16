@@ -471,11 +471,24 @@ fn main() {
                             None
                         };
 
-            // Provides as many CIDs as possible.
-            while client.conn.scids_left() > 0 {
-                let (scid, reset_token) = generate_cid_and_reset_token(&rng);
-                if client.conn.new_scid(&scid, reset_token, false).is_err() {
-                    break;
+                        client.http_conn = match Http3Conn::with_conn(
+                            &mut client.conn,
+                            conn_args.max_field_section_size,
+                            conn_args.qpack_max_table_capacity,
+                            conn_args.qpack_blocked_streams,
+                            dgram_sender,
+                            Rc::new(RefCell::new(stdout_sink)),
+                        ) {
+                            Ok(v) => Some(v),
+
+                            Err(e) => {
+                                trace!("{} {}", client.conn.trace_id(), e);
+                                None
+                            },
+                        };
+
+                        client.app_proto_selected = true;
+                    }
                 }
 
                 if client.http_conn.is_some() {
@@ -499,30 +512,63 @@ fn main() {
                         )
                         .is_err()
                     {
-                        continue 'events;
+                        continue 'read;
                     }
-                }
-
-                handle_path_events(client);
-
-                // See whether source Connection IDs have been retired.
-                while let Some(retired_scid) = client.conn.retired_scid_next() {
-                    info!("Retiring source CID {:?}", retired_scid);
-                    clients_ids.remove(&retired_scid);
                 }
 
                 // Provides as many CIDs as possible.
-                while client.conn.source_cids_left() > 0 {
+                while client.conn.scids_left() > 0 {
                     let (scid, reset_token) = generate_cid_and_reset_token(&rng);
-                    if client
-                        .conn
-                        .new_source_cid(&scid, reset_token, false)
-                        .is_err()
-                    {
+                    if client.conn.new_scid(&scid, reset_token, false).is_err() {
                         break;
                     }
 
-                    clients_ids.insert(scid, client.client_id);
+                    if client.http_conn.is_some() {
+                        let conn = &mut client.conn;
+                        let http_conn = client.http_conn.as_mut().unwrap();
+                        let partial_responses = &mut client.partial_responses;
+
+                        // Handle writable streams.
+                        for stream_id in conn.writable() {
+                            http_conn.handle_writable(conn, partial_responses, stream_id);
+                        }
+
+                        if http_conn
+                            .handle_requests(
+                                conn,
+                                &mut client.partial_requests,
+                                partial_responses,
+                                &args.root,
+                                &args.index,
+                                &mut buf,
+                            )
+                            .is_err()
+                        {
+                            continue 'events;
+                        }
+                    }
+
+                    handle_path_events(client);
+
+                    // See whether source Connection IDs have been retired.
+                    while let Some(retired_scid) = client.conn.retired_scid_next() {
+                        info!("Retiring source CID {:?}", retired_scid);
+                        clients_ids.remove(&retired_scid);
+                    }
+
+                    // Provides as many CIDs as possible.
+                    while client.conn.scids_left() > 0 {
+                        let (scid, reset_token) = generate_cid_and_reset_token(&rng);
+                        if client
+                            .conn
+                            .new_scid(&scid, reset_token, false)
+                            .is_err()
+                        {
+                            break;
+                        }
+
+                        clients_ids.insert(scid, client.client_id);
+                    }
                 }
             }
         }
